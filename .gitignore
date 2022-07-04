@@ -1,0 +1,7 @@
+.DS_Store
+.vscode/
+.pytest_cache/
+.idea/
+__pycache__/
+try.py
+deep_kit.egg-info/

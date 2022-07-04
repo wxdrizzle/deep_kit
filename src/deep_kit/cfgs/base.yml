@@ -1,0 +1,46 @@
+exp:
+    name: tmp
+    names_exp_delete: null
+    path_save: ./save
+    idx_device: 0 # -1 for CPU
+    rand_seed: null
+    n_workers: 0
+
+    mode: train
+    train:
+        n_epochs: 2000
+        batch_size: 10
+        optimizer:
+            name: adam
+            lr: 1e-3
+            sgd:
+                weight_decay: 0.
+                momentum: 0.9
+                nesterov: False
+            adam: 
+                weight_decay: 0.
+            adamw:
+                weight_decay: 0.
+        scheduler:
+            name: null
+            cycliclr:
+                lr_base: 1e-5
+                lr_max: 1e-3
+                mode: exp_range
+                gamma: 0.99999
+                cycle_momentum: False
+            multisteplr:
+                milestones: [10, 20, 30, 40]
+                gamma: 0.2
+    val:
+        batch_size: 10
+        n_epochs_once: 1
+
+    test:
+        batch_size: 10
+
+model:
+    name: ???
+
+dataset:
+    name: ???
