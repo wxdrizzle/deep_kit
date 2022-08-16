@@ -7,9 +7,16 @@ Ocfg.register_new_resolver('len', lambda x: len(x))
 cfg_base = Ocfg.create(importlib.resources.read_text(cfgs, 'base.yml'))
 cfg_default_exp = Ocfg.load('cfgs/default/experiment.yml')
 cfg_cli = Ocfg.from_cli()
-assert cfg_cli.exp.name[:2] == 'tr'
+
+prefix = cfg_cli.exp.name[:2]
 cfg_cli.exp.name = cfg_cli.exp.name[2:]
-cfg_exp = Ocfg.load(f'cfgs/{cfg_cli.exp.name}.yml')
+
+if prefix == 'tr':
+    cfg_exp = Ocfg.load(f'cfgs/{cfg_cli.exp.name}.yml')
+elif prefix == 'te':
+    cfg_exp = Ocfg.load(f'cfgs/test/{cfg_cli.exp.name}.yml')
+else:
+    raise ValueError
 cfg_default_model = Ocfg.load(f'cfgs/default/models/{cfg_exp.model.name}.yml')
 cfg_default_dataset = Ocfg.load(f'cfgs/default/datasets/{cfg_exp.dataset.name}.yml')
 

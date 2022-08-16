@@ -11,6 +11,7 @@ from ..utils import setup_logger, find_class
 
 
 class Trainer(Operator):
+
     def __init__(self, cfg):
         super().__init__(cfg)
 
@@ -27,24 +28,26 @@ class Trainer(Operator):
     def _init_dataloaders(self):
         cls_dataset, self.path_file_dataset = find_class(self.cfg.dataset.name, 'dataset')
 
-        self.train_set = cls_dataset(mode='train', cfg=self.cfg)
-        self.val_set = cls_dataset(mode='val', cfg=self.cfg)
+        if self.cfg.exp.mode == 'train':
+            self.train_set = cls_dataset(mode='train', cfg=self.cfg)
+            self.val_set = cls_dataset(mode='val', cfg=self.cfg)
+            self.train_loader = DataLoader(
+                dataset=self.train_set,
+                batch_size=self.cfg.exp.train.batch_size,
+                collate_fn=getattr(self.train_set, 'get_batch', None),
+                num_workers=self.cfg.exp.n_workers,
+                shuffle=not issubclass(type(self.train_set), IterableDataset),
+            )
+            self.val_loader = DataLoader(
+                dataset=self.val_set,
+                batch_size=self.cfg.exp.val.batch_size,
+                collate_fn=getattr(self.val_set, 'get_batch', None),
+                num_workers=self.cfg.exp.n_workers,
+                shuffle=False,
+            )
+        elif self.cfg.exp.mode != 'test':
+            raise ValueError
         self.test_set = cls_dataset(mode='test', cfg=self.cfg)
-
-        self.train_loader = DataLoader(
-            dataset=self.train_set,
-            batch_size=self.cfg.exp.train.batch_size,
-            collate_fn=getattr(self.train_set, 'get_batch', None),
-            num_workers=self.cfg.exp.n_workers,
-            shuffle=not issubclass(type(self.train_set), IterableDataset),
-        )
-        self.val_loader = DataLoader(
-            dataset=self.val_set,
-            batch_size=self.cfg.exp.val.batch_size,
-            collate_fn=getattr(self.val_set, 'get_batch', None),
-            num_workers=self.cfg.exp.n_workers,
-            shuffle=False,
-        )
         self.test_loader = DataLoader(
             dataset=self.test_set,
             batch_size=self.cfg.exp.test.batch_size,
@@ -108,13 +111,14 @@ class Trainer(Operator):
         optimizer, scheduler = self._get_optimizer(self.model.parameters())
 
         self.score_best = -math.inf
+        self.is_best = True
         iter_total = 0
         for epoch in range(self.cfg.exp.train.n_epochs):
             # validation
             if epoch % self.cfg.exp.val.n_epochs_once == 0:
                 self.val(epoch, mode='val')
-            if self.is_best:
-                self.val(epoch, mode='test')
+                if self.is_best:
+                    self.val(epoch, mode='test')
 
             self.model.train()
             self.model.before_epoch(mode='train')
@@ -136,7 +140,7 @@ class Trainer(Operator):
                     self.writer.add_scalar(f'train/{name}', value, iter_total)
 
             self.model.after_epoch(mode='train')
-            self.model.vis(self.writer, epoch, data, output, mode='train')
+            self.model.vis(self.writer, epoch, data, output, mode='train', in_epoch=False)
 
             if scheduler:
                 scheduler.step()
@@ -166,23 +170,34 @@ class Trainer(Operator):
                     data = input.to(self.device), ground_truth.to(self.device)
                 output = self.model(data)
                 _ = self.model.get_metrics(data, output, mode=mode)
+                self.model.vis(self.writer, epoch, data, output, mode=mode, in_epoch=True)
             self.model.after_epoch(mode)
 
             if mode == 'val':
                 self.is_best = self.model.metrics_epoch['metric_final'] > self.score_best
                 if self.is_best:
                     self.score_best = self.model.metrics_epoch['metric_final']
-            self.model.vis(self.writer, epoch, data, output, mode=mode)
 
             result_log = [f'epoch: {epoch}']
             for (name, value) in self.model.metrics_epoch.items():
-                self.writer.add_scalar(f'{mode}/{name}', value, epoch)
                 result_log.append(f'{name}: {value:.4f}')
             info_logged = ', '.join(result_log)
             self.logger_extra.warn(f'[{mode}] {info_logged}')
             self.logger_val.info(info_logged)
 
+            self.model.vis(self.writer, epoch, data, output, mode=mode, in_epoch=False)
+
+            for (name, value) in self.model.metrics_epoch.items():
+                self.writer.add_scalar(f'{mode}/{name}', value, epoch)
+
             # save best model
             if self.is_best and mode == 'val':
                 self.logger_checkpoints.warn(f'Saving best model: epoch {epoch}')
                 torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, 'model_best.pth'))
+
+    def test(self):
+        self.model = self.model.to(self.device)
+        self.model.load_state_dict(torch.load(self.cfg.exp.test.path_model_trained, map_location=self.device),
+                                   strict=False)
+        self.is_best = False
+        self.val(epoch=0, mode='test')

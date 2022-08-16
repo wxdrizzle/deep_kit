@@ -8,7 +8,7 @@ exp:
 
     mode: train
     train:
-        n_epochs: 2000
+        n_epochs: 1000
         batch_size: 10
         optimizer:
             name: adam
@@ -38,6 +38,7 @@ exp:
 
     test:
         batch_size: 10
+        path_model_trained: null
 
 model:
     name: ???
