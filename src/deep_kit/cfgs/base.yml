@@ -35,6 +35,7 @@ exp:
     val:
         batch_size: 10
         n_epochs_once: 1
+        save_every_better_model: False
 
     test:
         batch_size: 10
