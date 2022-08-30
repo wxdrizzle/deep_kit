@@ -195,7 +195,11 @@ class Trainer(Operator):
                 self.logger_checkpoints.warn(f'Saving best model: epoch {epoch}')
                 torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, 'model_best.pth'))
 
-                if getattr(self.cfg.exp.val, 'save_every_better_model', False):
+            if mode == 'val':
+                if getattr(self.cfg.exp.val, 'save_every_model', False):
+                    self.logger_checkpoints.warn(f'Saving current model: epoch {epoch}')
+                    torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, f'model_epoch{epoch}.pth'))
+                elif self.is_best and getattr(self.cfg.exp.val, 'save_every_better_model', False):
                     self.logger_checkpoints.warn(f'Saving current model: epoch {epoch}')
                     torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, f'model_epoch{epoch}.pth'))
 
