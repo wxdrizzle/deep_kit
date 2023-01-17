@@ -8,6 +8,8 @@ exp:
 
     mode: train
     train:
+        path_model_trained: null
+        epoch_start: 0
         n_epochs: 1000
         batch_size: 10
         optimizer:
@@ -34,13 +36,16 @@ exp:
                 gamma: 0.2
     val:
         batch_size: 10
+        skip_initial_val: False
         n_epochs_once: 1
+        n_repeat: 1
         save_every_model: False
         save_every_better_model: False
 
     test:
         batch_size: 10
         path_model_trained: null
+        n_repeat: 1
 
 model:
     name: ???

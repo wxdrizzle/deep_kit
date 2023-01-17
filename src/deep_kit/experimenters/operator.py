@@ -33,7 +33,9 @@ class Operator:
             torch.backends.cudnn.enabled = False
 
     def _init_device(self):
-        if (idx := self.cfg.exp.idx_device) >= 0:
+        if isinstance((idx := self.cfg.exp.idx_device), list) and len(idx) > 1:
+            name_device = f'cuda'
+        elif idx >= 0:
             name_device = f'cuda:{idx}'
         elif idx == -1:
             name_device = 'cpu'
