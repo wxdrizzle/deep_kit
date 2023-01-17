@@ -3,6 +3,7 @@ import math
 from rich.progress import track
 
 import torch
+import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import IterableDataset, DataLoader
 
@@ -37,6 +38,8 @@ class Trainer(Operator):
                 collate_fn=getattr(self.train_set, 'get_batch', None),
                 num_workers=self.cfg.exp.n_workers,
                 shuffle=not issubclass(type(self.train_set), IterableDataset),
+                pin_memory=True,
+                drop_last=True,
             )
             self.val_loader = DataLoader(
                 dataset=self.val_set,
@@ -44,6 +47,7 @@ class Trainer(Operator):
                 collate_fn=getattr(self.val_set, 'get_batch', None),
                 num_workers=self.cfg.exp.n_workers,
                 shuffle=False,
+                pin_memory=True,
             )
         elif self.cfg.exp.mode != 'test':
             raise ValueError
@@ -54,6 +58,7 @@ class Trainer(Operator):
             collate_fn=getattr(self.test_set, 'get_batch', None),
             num_workers=self.cfg.exp.n_workers,
             shuffle=False,
+            pin_memory=True,
         )
 
     def _init_loggers(self):
@@ -98,6 +103,8 @@ class Trainer(Operator):
             elif name_sch == 'multisteplr':
                 scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=cfg_sch.milestones,
                                                            gamma=cfg_sch.gamma)
+            elif name_sch == 'exponentiallr':
+                scheduler = optim.lr_scheduler.ExponentialLR(optimizer=optimizer, gamma=cfg_sch.gamma)
             else:
                 raise NotImplementedError(f'Unknown scheduler: {name_sch}')
         else:
@@ -108,20 +115,31 @@ class Trainer(Operator):
     def train(self):
         self.logger_extra.warn(f'------ Training ------')
         self.model = self.model.to(self.device)
+        if isinstance((idx := self.cfg.exp.idx_device), list) and len(idx) > 1:
+            self.model = nn.DataParallel(self.model, device_ids=idx)
         optimizer, scheduler = self._get_optimizer(self.model.parameters())
 
+        if self.cfg.exp.train.path_model_trained is not None:
+            self.model.load_state_dict(torch.load(self.cfg.exp.train.path_model_trained, map_location=self.device),
+                                       strict=False)
         self.score_best = -math.inf
         self.is_best = True
         iter_total = 0
-        for epoch in range(self.cfg.exp.train.n_epochs):
+        for epoch in range(self.cfg.exp.train.epoch_start, self.cfg.exp.train.n_epochs):
             # validation
-            if epoch % self.cfg.exp.val.n_epochs_once == 0:
+            if self.cfg.exp.val.skip_initial_val and epoch == self.cfg.exp.train.epoch_start:
+                skip_val = True
+            elif epoch % self.cfg.exp.val.n_epochs_once != 0:
+                skip_val = True
+            else:
+                skip_val = False
+            if not skip_val:
                 self.val(epoch, mode='val')
                 if self.is_best:
                     self.val(epoch, mode='test')
 
             self.model.train()
-            self.model.before_epoch(mode='train')
+            self.model.before_epoch(mode='train', i_repeat=epoch)
             for _, data in enumerate(track(self.train_loader, transient=True, description='training')):
                 iter_total += 1
 
@@ -161,29 +179,31 @@ class Trainer(Operator):
 
         with torch.no_grad():
             self.model.eval()
-            self.model.before_epoch(mode)
-            for i, data in enumerate(track(data_loader, transient=True, description=mode)):
-                if hasattr(dataset, 'to_device'):
-                    data = dataset.to_device(data, device=self.device)
-                else:
-                    input, ground_truth = data
-                    data = input.to(self.device), ground_truth.to(self.device)
-                output = self.model(data)
-                _ = self.model.get_metrics(data, output, mode=mode)
-                self.model.vis(self.writer, epoch, data, output, mode=mode, in_epoch=True)
-            self.model.after_epoch(mode)
 
-            if mode == 'val':
-                self.is_best = self.model.metrics_epoch['metric_final'] > self.score_best
-                if self.is_best:
-                    self.score_best = self.model.metrics_epoch['metric_final']
+            for i_repeat in range(self.exp[mode].n_repeat):
+                self.model.before_epoch(mode, i_repeat)
+                for _, data in enumerate(track(data_loader, transient=True, description=mode)):
+                    if hasattr(dataset, 'to_device'):
+                        data = dataset.to_device(data, device=self.device)
+                    else:
+                        input, ground_truth = data
+                        data = input.to(self.device), ground_truth.to(self.device)
+                    output = self.model(data)
+                    _ = self.model.get_metrics(data, output, mode=mode)
+                    self.model.vis(self.writer, epoch, data, output, mode=mode, in_epoch=True)
+                self.model.after_epoch(mode)
 
-            result_log = [f'epoch: {epoch}']
-            for (name, value) in self.model.metrics_epoch.items():
-                result_log.append(f'{name}: {value:.4f}')
-            info_logged = ', '.join(result_log)
-            self.logger_extra.warn(f'[{mode}] {info_logged}')
-            self.logger_val.info(info_logged)
+                if mode == 'val':
+                    self.is_best = self.model.metrics_epoch['metric_final'] > self.score_best
+                    if self.is_best:
+                        self.score_best = self.model.metrics_epoch['metric_final']
+
+                result_log = [f'epoch: {epoch}']
+                for (name, value) in self.model.metrics_epoch.items():
+                    result_log.append(f'{name}: {value:.4f}')
+                info_logged = ', '.join(result_log)
+                self.logger_extra.warn(f'[{mode}] {info_logged}')
+                self.logger_val.info(info_logged)
 
             self.model.vis(self.writer, epoch, data, output, mode=mode, in_epoch=False)
 
