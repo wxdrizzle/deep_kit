@@ -180,7 +180,7 @@ class Trainer(Operator):
         with torch.no_grad():
             self.model.eval()
 
-            for i_repeat in range(self.exp[mode].n_repeat):
+            for i_repeat in range(self.cfg.exp[mode].n_repeat):
                 self.model.before_epoch(mode, i_repeat)
                 for _, data in enumerate(track(data_loader, transient=True, description=mode)):
                     if hasattr(dataset, 'to_device'):
