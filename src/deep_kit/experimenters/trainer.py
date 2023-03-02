@@ -115,7 +115,7 @@ class Trainer(Operator):
     def train(self):
         self.logger_extra.warn(f'------ Training ------')
         self.model = self.model.to(self.device)
-        if isinstance((idx := self.cfg.exp.idx_device), list) and len(idx) > 1:
+        if (not isinstance(idx := self.cfg.exp.idx_device, int)) and len(list(idx)) > 1:
             self.model = nn.DataParallel(self.model, device_ids=idx)
         optimizer, scheduler = self._get_optimizer(self.model.parameters())
 
