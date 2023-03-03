@@ -105,6 +105,15 @@ class Trainer(Operator):
                                                            gamma=cfg_sch.gamma)
             elif name_sch == 'exponentiallr':
                 scheduler = optim.lr_scheduler.ExponentialLR(optimizer=optimizer, gamma=cfg_sch.gamma)
+            elif name_sch == 'lambdalr':
+                lambdas_lr = []
+                for where in cfg_sch.where: # e.g., model.lambda_lr_0
+                    attrs = where.split('.')
+                    lambda_lr = self
+                    for attr in attrs:
+                        lambda_lr = getattr(lambda_lr, attr)
+                    lambdas_lr.append(lambda_lr)
+                scheduler = optim.lr_scheduler.LambdaLR(optimizer=optimizer, lr_lambda=lambdas_lr)
             else:
                 raise NotImplementedError(f'Unknown scheduler: {name_sch}')
         else:
@@ -117,7 +126,8 @@ class Trainer(Operator):
         self.model = self.model.to(self.device)
         if (not isinstance(idx := self.cfg.exp.idx_device, int)) and len(list(idx)) > 1:
             self.model = nn.DataParallel(self.model, device_ids=idx)
-        optimizer, scheduler = self._get_optimizer(self.model.parameters())
+
+        optimizer, scheduler = self._get_optimizer(getattr(self.model, 'get_params', 'parameters')())
 
         if self.cfg.exp.train.path_model_trained is not None:
             self.model.load_state_dict(torch.load(self.cfg.exp.train.path_model_trained, map_location=self.device),
