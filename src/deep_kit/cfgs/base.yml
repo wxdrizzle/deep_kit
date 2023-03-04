@@ -41,8 +41,8 @@ exp:
                     - 'model.lambda_lr_0'
                     - 'model.lambda_lr_1'
                     - 'model.lambda_lr_2'
-                0: [0.001, 0.001, 0.001]
-                1: [0.0005, null, 0.0007]
+                0: [null, null, null]
+                2: [null, null, null]
 
 
     val:
