@@ -6,9 +6,21 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import IterableDataset, DataLoader
+from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data.distributed import DistributedSampler
+import torch.distributed as dist
 
 from .operator import Operator
 from ..utils import setup_logger, find_class
+
+
+class MyDistributedDataParallel(DistributedDataParallel):
+
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.module, name)
 
 
 class Trainer(Operator):
@@ -32,14 +44,22 @@ class Trainer(Operator):
         if self.cfg.exp.mode == 'train':
             self.train_set = cls_dataset(mode='train', cfg=self.cfg)
             self.val_set = cls_dataset(mode='val', cfg=self.cfg)
+
+            if self.cfg.var.is_parallel:
+                sampler_train = DistributedSampler(self.train_set)
+                shuffle_train = False
+            else:
+                shuffle_train = not issubclass(type(self.train_set), IterableDataset)
+
             self.train_loader = DataLoader(
                 dataset=self.train_set,
                 batch_size=self.cfg.exp.train.batch_size,
                 collate_fn=getattr(self.train_set, 'get_batch', None),
                 num_workers=self.cfg.exp.n_workers,
-                shuffle=not issubclass(type(self.train_set), IterableDataset),
+                shuffle=shuffle_train,
                 pin_memory=True,
                 drop_last=True,
+                sampler=sampler_train if self.cfg.var.is_parallel else None,
             )
             self.val_loader = DataLoader(
                 dataset=self.val_set,
@@ -51,6 +71,7 @@ class Trainer(Operator):
             )
         elif self.cfg.exp.mode != 'test':
             raise ValueError
+
         self.test_set = cls_dataset(mode='test', cfg=self.cfg)
         self.test_loader = DataLoader(
             dataset=self.test_set,
@@ -124,13 +145,20 @@ class Trainer(Operator):
     def train(self):
         self.logger_extra.warn(f'------ Training ------')
         self.model = self.model.to(self.device)
-        if (not isinstance(idx := self.cfg.exp.idx_device, int)) and len(list(idx)) > 1:
-            self.model = nn.DataParallel(self.model, device_ids=idx)
+        if self.cfg.var.is_parallel:
+            id_device = self.cfg.exp.idx_device[dist.get_rank()]
+            self.model = MyDistributedDataParallel(self.model, device_ids=[id_device])
 
         optimizer, scheduler = self._get_optimizer(getattr(self.model, 'get_params', 'parameters')())
 
         if self.cfg.exp.train.path_model_trained is not None:
-            self.model.load_state_dict(torch.load(self.cfg.exp.train.path_model_trained, map_location=self.device),
+            if self.cfg.var.is_parallel:
+                dist.barrier()
+                id_device = self.cfg.exp.idx_device[dist.get_rank()]
+                map_location = {'cuda:0': f'cuda:{id_device}'}
+            else:
+                map_location = self.device
+            self.model.load_state_dict(torch.load(self.cfg.exp.train.path_model_trained, map_location=map_location),
                                        strict=False)
         self.score_best = -math.inf
         self.is_best = True
@@ -144,9 +172,12 @@ class Trainer(Operator):
             else:
                 skip_val = False
             if not skip_val:
-                self.val(epoch, mode='val')
-                if self.is_best:
-                    self.val(epoch, mode='test')
+                if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+                    self.val(epoch, mode='val')
+                    if self.is_best:
+                        self.val(epoch, mode='test')
+            if self.cfg.var.is_parallel:
+                dist.barrier()
 
             self.model.train()
             self.model.before_epoch(mode='train', i_repeat=epoch)
@@ -165,10 +196,12 @@ class Trainer(Operator):
                 optimizer.step()
 
                 for name, value in metrics.items():
-                    self.writer.add_scalar(f'train/{name}', value, iter_total)
+                    if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+                        self.writer.add_scalar(f'train/{name}', value, iter_total)
 
             self.model.after_epoch(mode='train')
-            self.model.vis(self.writer, epoch, data, output, mode='train', in_epoch=False)
+            if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+                self.model.vis(self.writer, epoch, data, output, mode='train', in_epoch=False)
 
             if scheduler:
                 scheduler.step()
@@ -181,6 +214,9 @@ class Trainer(Operator):
             self.logger_train.info(info_logged)
 
         self.logger_train.warn(f'------ Training finished ------')
+
+        if self.cfg.var.is_parallel:
+            dist.destroy_process_group()
 
     def val(self, epoch, mode='val'):
         assert mode in ['val', 'test']
@@ -198,9 +234,15 @@ class Trainer(Operator):
                     else:
                         input, ground_truth = data
                         data = input.to(self.device), ground_truth.to(self.device)
-                    output = self.model(data)
+                    if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+                        # if we use self.model(data), then after validation, the training will get stuck
+                        # see https://github.com/pytorch/pytorch/issues/54059#issuecomment-801754630
+                        output = self.model.module(data)
+                    else:
+                        output = self.model(data)
                     _ = self.model.get_metrics(data, output, mode=mode)
-                    self.model.vis(self.writer, epoch, data, output, mode=mode, in_epoch=True)
+                    if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+                        self.model.vis(self.writer, epoch, data, output, mode=mode, in_epoch=True)
                 self.model.after_epoch(mode)
 
                 if mode == 'val':
@@ -215,15 +257,18 @@ class Trainer(Operator):
                 self.logger_extra.warn(f'[{mode}] {info_logged}')
                 self.logger_val.info(info_logged)
 
-            self.model.vis(self.writer, epoch, data, output, mode=mode, in_epoch=False)
+            if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+                self.model.vis(self.writer, epoch, data, output, mode=mode, in_epoch=False)
 
             for (name, value) in self.model.metrics_epoch.items():
-                self.writer.add_scalar(f'{mode}/{name}', value, epoch)
+                if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+                    self.writer.add_scalar(f'{mode}/{name}', value, epoch)
 
             # save best model
             if self.is_best and mode == 'val':
-                self.logger_checkpoints.warn(f'Saving best model: epoch {epoch}')
-                torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, 'model_best.pth'))
+                if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+                    self.logger_checkpoints.warn(f'Saving best model: epoch {epoch}')
+                    torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, 'model_best.pth'))
 
             if mode == 'val':
                 if getattr(self.cfg.exp.val, 'save_every_model', False):
@@ -239,3 +284,6 @@ class Trainer(Operator):
                                    strict=False)
         self.is_best = False
         self.val(epoch=0, mode='test')
+
+        if self.cfg.var.is_parallel:
+            dist.destroy_process_group()

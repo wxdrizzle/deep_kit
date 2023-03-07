@@ -5,6 +5,7 @@ import random
 from copy import deepcopy
 import numpy as np
 from omegaconf import OmegaConf as Ocfg
+import torch.distributed as dist
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -15,6 +16,17 @@ class Operator:
     def __init__(self, cfg):
         self.cfg = cfg
         cfg.var.obj_operator = self
+
+        if (not isinstance(idx := cfg.exp.idx_device, int)) and len(list(idx)) > 1:
+            cfg.var.is_parallel = True
+            dist.init_process_group(backend='nccl')
+            # need to add this line to avoid the following bug:
+            # https://discuss.pytorch.org/t/distributeddataparallel-gru-module-gets-additional-processes-on-gpu-0-1st-gpu-and-takes-more-memory/140225
+            # https://github.com/pytorch/pytorch/issues/70404#issuecomment-1001113109
+            torch.cuda.set_device(cfg.exp.idx_device[dist.get_rank()])
+            torch.cuda.empty_cache()
+        else:
+            cfg.var.is_parallel = False
 
     def _init_seed(self):
         if self.cfg.exp.rand_seed is None:
@@ -33,8 +45,10 @@ class Operator:
             torch.backends.cudnn.enabled = False
 
     def _init_device(self):
-        if (not isinstance(idx := self.cfg.exp.idx_device, int)) and len(list(idx)) > 1:
-            name_device = f'cuda'
+        idx = self.cfg.exp.idx_device
+
+        if self.cfg.var.is_parallel:
+            name_device = f'cuda:{idx[dist.get_rank()]}'
         elif idx >= 0:
             name_device = f'cuda:{idx}'
         elif idx == -1:
@@ -62,33 +76,39 @@ class Operator:
         self.path_exp = os.path.join(self.cfg.exp.path_save, self.name_exp)
         if self.cfg.exp.mode == 'train':
             self.path_checkpoints = os.path.join(self.path_exp, 'checkpoints')
-            os.makedirs(self.path_checkpoints)
+            if not os.path.exists(self.path_checkpoints):
+                os.makedirs(self.path_checkpoints)
         self.path_vis = os.path.join(self.cfg.exp.path_save, 'runs', self.name_exp)
-        os.makedirs(self.path_vis)
+        if not os.path.exists(self.path_vis):
+            os.makedirs(self.path_vis)
         self.path_log = self.path_exp
         if not os.path.exists(self.path_log):
             os.makedirs(self.path_log)
         self.path_backup = os.path.join(self.path_exp, 'backup')
         if not os.path.exists(self.path_backup):
             os.makedirs(self.path_backup)
-        for path in self.model.paths_file_net + [self.path_file_model, self.path_file_dataset]:
-            _ = shutil.copyfile(path, os.path.join(self.path_backup, os.path.basename(path)))
 
-        if (self.cfg.exp.names_exp_delete is not None) and os.path.exists(self.cfg.exp.path_save):
-            dirs_exp = os.listdir(self.cfg.exp.path_save)
-            for dir in dirs_exp:
-                if dir != self.name_exp and check_substrings():
-                    shutil.rmtree(os.path.join(self.cfg.exp.path_save, dir))
-                    if os.path.exists(os.path.join(self.cfg.exp.path_save, 'runs', dir)):
-                        shutil.rmtree(os.path.join(self.cfg.exp.path_save, 'runs', dir))
+        if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+            for path in self.model.paths_file_net + [self.path_file_model, self.path_file_dataset]:
+                _ = shutil.copyfile(path, os.path.join(self.path_backup, os.path.basename(path)))
+
+            if (self.cfg.exp.names_exp_delete is not None) and os.path.exists(self.cfg.exp.path_save):
+                dirs_exp = os.listdir(self.cfg.exp.path_save)
+                for dir in dirs_exp:
+                    if dir != self.name_exp and check_substrings():
+                        shutil.rmtree(os.path.join(self.cfg.exp.path_save, dir))
+                        if os.path.exists(os.path.join(self.cfg.exp.path_save, 'runs', dir)):
+                            shutil.rmtree(os.path.join(self.cfg.exp.path_save, 'runs', dir))
 
     def _init_writer(self):
-        self.writer = SummaryWriter(self.path_vis)
+        if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+            self.writer = SummaryWriter(self.path_vis)
 
     def _init_log_basic_info(self):
-        self.logger_extra.warn(f'Experiment saved in {self.path_exp}')
-        cfg_printed = deepcopy(self.cfg)
-        Ocfg.set_readonly(cfg_printed, False)
-        del cfg_printed.var
-        self.logger_extra.warn(Ocfg.to_yaml(cfg_printed))
-        Ocfg.save(config=cfg_printed, f=os.path.join(self.path_log, 'configs.yml'))
+        if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+            self.logger_extra.warn(f'Experiment saved in {self.path_exp}')
+            cfg_printed = deepcopy(self.cfg)
+            Ocfg.set_readonly(cfg_printed, False)
+            del cfg_printed.var
+            self.logger_extra.warn(Ocfg.to_yaml(cfg_printed))
+            Ocfg.save(config=cfg_printed, f=os.path.join(self.path_log, 'configs.yml'))
