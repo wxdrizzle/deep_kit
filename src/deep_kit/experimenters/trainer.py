@@ -147,6 +147,7 @@ class Trainer(Operator):
         self.model = self.model.to(self.device)
         if self.cfg.var.is_parallel:
             id_device = self.cfg.exp.idx_device[dist.get_rank()]
+            self.model = nn.SyncBatchNorm.convert_sync_batchnorm(self.model)
             self.model = MyDistributedDataParallel(self.model, device_ids=[id_device])
 
         optimizer, scheduler = self._get_optimizer(getattr(self.model, 'get_params', 'parameters')())
@@ -234,8 +235,8 @@ class Trainer(Operator):
                     else:
                         input, ground_truth = data
                         data = input.to(self.device), ground_truth.to(self.device)
-                    if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
-                        # if we use self.model(data), then after validation, the training will get stuck
+                    if self.cfg.var.is_parallel and dist.get_rank() == 0:
+                        # if we use self.model(data), then after validation, training will get stuck
                         # see https://github.com/pytorch/pytorch/issues/54059#issuecomment-801754630
                         output = self.model.module(data)
                     else:
