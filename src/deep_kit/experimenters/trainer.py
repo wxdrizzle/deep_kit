@@ -46,7 +46,7 @@ class Trainer(Operator):
             self.val_set = cls_dataset(mode='val', cfg=self.cfg)
 
             if self.cfg.var.is_parallel:
-                sampler_train = DistributedSampler(self.train_set)
+                self.sampler_train = DistributedSampler(self.train_set)
                 shuffle_train = False
             else:
                 shuffle_train = not issubclass(type(self.train_set), IterableDataset)
@@ -59,7 +59,7 @@ class Trainer(Operator):
                 shuffle=shuffle_train,
                 pin_memory=True,
                 drop_last=True,
-                sampler=sampler_train if self.cfg.var.is_parallel else None,
+                sampler=self.sampler_train if self.cfg.var.is_parallel else None,
             )
             self.val_loader = DataLoader(
                 dataset=self.val_set,
@@ -182,6 +182,11 @@ class Trainer(Operator):
 
             self.model.train()
             self.model.before_epoch(mode='train', i_repeat=epoch)
+
+            if self.cfg.var.is_parallel:
+                # see WARNING in https://pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler
+                self.sampler_train.set_epoch(epoch)
+
             for _, data in enumerate(track(self.train_loader, transient=True, description='training')):
                 iter_total += 1
 
