@@ -52,6 +52,7 @@ exp:
         n_repeat: 1
         save_every_model: False
         save_every_better_model: False
+        save_latest_model: False
 
     test:
         batch_size: 10

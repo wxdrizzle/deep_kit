@@ -283,6 +283,9 @@ class Trainer(Operator):
                 elif self.is_best and getattr(self.cfg.exp.val, 'save_every_better_model', False):
                     self.logger_checkpoints.warn(f'Saving current model: epoch {epoch}')
                     torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, f'model_epoch{epoch}.pth'))
+                if self.cfg.exp.val.save_latest_model:
+                    self.logger_checkpoints.warn(f'Saving latest model: epoch {epoch}')
+                    torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, 'model_latest.pth'))
 
     def test(self):
         self.model = self.model.to(self.device)
