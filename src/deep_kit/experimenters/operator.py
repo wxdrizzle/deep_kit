@@ -19,7 +19,10 @@ class Operator:
 
         if (not isinstance(idx := cfg.exp.idx_device, int)) and len(list(idx)) > 1:
             cfg.var.is_parallel = True
-            dist.init_process_group(backend='nccl')
+            if os.name == 'nt': # if system is windows
+                dist.init_process_group(backend='gloo')
+            else:
+                dist.init_process_group(backend='nccl')
             # need to add this line to avoid the following bug:
             # https://discuss.pytorch.org/t/distributeddataparallel-gru-module-gets-additional-processes-on-gpu-0-1st-gpu-and-takes-more-memory/140225
             # https://github.com/pytorch/pytorch/issues/70404#issuecomment-1001113109

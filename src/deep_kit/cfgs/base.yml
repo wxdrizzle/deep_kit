@@ -5,6 +5,7 @@ exp:
     idx_device: 0 # -1 for CPU
     rand_seed: null
     n_workers: 0
+    compile_model: False # for pytorch 2.0+
 
     mode: train
     train:

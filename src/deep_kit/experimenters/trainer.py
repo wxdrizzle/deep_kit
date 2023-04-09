@@ -33,6 +33,9 @@ class Trainer(Operator):
         self._init_device()
         cls_model, self.path_file_model = find_class(cfg.model.name, 'model')
         self.model = cls_model(cfg)
+        if torch.__version__.startswith('2.'):
+            if cfg.exp.compile_model:
+                self.model = torch.compile(self.model, dynamic=True)
         self._init_dirs()
         self._init_loggers()
         self._init_writer()
@@ -150,7 +153,7 @@ class Trainer(Operator):
             self.model = nn.SyncBatchNorm.convert_sync_batchnorm(self.model)
             self.model = MyDistributedDataParallel(self.model, device_ids=[id_device])
 
-        optimizer, scheduler = self._get_optimizer(getattr(self.model, 'get_params', 'parameters')())
+        optimizer, scheduler = self._get_optimizer(getattr(self.model, 'get_params', self.model.parameters)())
 
         if self.cfg.exp.train.path_model_trained is not None:
             if self.cfg.var.is_parallel:
@@ -187,7 +190,11 @@ class Trainer(Operator):
                 # see WARNING in https://pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler
                 self.sampler_train.set_epoch(epoch)
 
-            for _, data in enumerate(track(self.train_loader, transient=True, description='training')):
+            if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+                obj_to_enumerate = track(self.train_loader, transient=True, description='training')
+            else:
+                obj_to_enumerate = self.train_loader
+            for _, data in enumerate(obj_to_enumerate):
                 iter_total += 1
 
                 optimizer.zero_grad()
