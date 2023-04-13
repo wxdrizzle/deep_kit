@@ -296,8 +296,13 @@ class Trainer(Operator):
 
     def test(self):
         self.model = self.model.to(self.device)
-        self.model.load_state_dict(torch.load(self.cfg.exp.test.path_model_trained, map_location=self.device),
-                                   strict=False)
+
+        dict_state = torch.load(self.cfg.exp.test.path_model_trained, map_location=self.device)
+        for key in list(dict_state.keys()):
+            if key.startswith('module.'):
+                dict_state[key[7:]] = dict_state.pop(key)
+        self.model.load_state_dict(dict_state, strict=True)
+
         self.is_best = False
         self.val(epoch=0, mode='test')
 
