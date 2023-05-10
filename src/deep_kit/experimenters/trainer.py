@@ -15,7 +15,6 @@ from ..utils import setup_logger, find_class
 
 
 class MyDistributedDataParallel(DistributedDataParallel):
-
     def __getattr__(self, name):
         try:
             return super().__getattr__(name)
@@ -24,7 +23,6 @@ class MyDistributedDataParallel(DistributedDataParallel):
 
 
 class Trainer(Operator):
-
     def __init__(self, cfg):
         super().__init__(cfg)
 
@@ -163,15 +161,20 @@ class Trainer(Operator):
             else:
                 map_location = self.device
             self.model.load_state_dict(torch.load(self.cfg.exp.train.path_model_trained, map_location=map_location),
-                                       strict=False)
+                                       strict=True)
         self.score_best = -math.inf
         self.is_best = True
         iter_total = 0
         for epoch in range(self.cfg.exp.train.epoch_start, self.cfg.exp.train.n_epochs):
             # validation
-            if self.cfg.exp.val.skip_initial_val and epoch == self.cfg.exp.train.epoch_start:
-                skip_val = True
+            if epoch == self.cfg.exp.train.epoch_start:
+                if self.cfg.exp.val.skip_initial_val:
+                    skip_val = True
+                else:
+                    skip_val = False
             elif epoch % self.cfg.exp.val.n_epochs_once != 0:
+                skip_val = True
+            elif epoch < self.cfg.exp.val.no_val_before_epoch:
                 skip_val = True
             else:
                 skip_val = False
@@ -301,7 +304,7 @@ class Trainer(Operator):
         for key in list(dict_state.keys()):
             if key.startswith('module.'):
                 dict_state[key[7:]] = dict_state.pop(key)
-        self.model.load_state_dict(dict_state, strict=True)
+        self.model.load_state_dict(dict_state, strict=False)
 
         self.is_best = False
         self.val(epoch=0, mode='test')

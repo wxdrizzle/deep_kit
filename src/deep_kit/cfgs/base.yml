@@ -50,6 +50,7 @@ exp:
         batch_size: 10
         skip_initial_val: False
         n_epochs_once: 1
+        no_val_before_epoch: 0
         n_repeat: 1
         save_every_model: False
         save_every_better_model: False
