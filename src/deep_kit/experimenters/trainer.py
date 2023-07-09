@@ -64,7 +64,8 @@ class Trainer(Operator):
                     shuffle=shuffle_train,
                     pin_memory=True,
                     drop_last=True,
-                    sampler=self.sampler_train if self.cfg.var.is_parallel else None,
+                    sampler=self.sampler_train
+                    if self.cfg.var.is_parallel and not issubclass(type(self.train_set), IterableDataset) else None,
                 )
                 self.val_loader = DataLoader(
                     dataset=self.val_set,
