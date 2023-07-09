@@ -27,8 +27,8 @@ class Trainer(Operator):
         super().__init__(cfg)
 
         self._init_seed()
-        self._init_dataloaders()
         self._init_device()
+        self._init_dataloaders()
         cls_model, self.path_file_model = find_class(cfg.model.name, 'model')
         self.model = cls_model(cfg)
         if torch.__version__.startswith('2.'):
@@ -43,45 +43,52 @@ class Trainer(Operator):
         cls_dataset, self.path_file_dataset = find_class(self.cfg.dataset.name, 'dataset')
 
         if self.cfg.exp.mode == 'train':
-            self.train_set = cls_dataset(mode='train', cfg=self.cfg)
-            self.val_set = cls_dataset(mode='val', cfg=self.cfg)
-
-            if self.cfg.var.is_parallel:
-                self.sampler_train = DistributedSampler(self.train_set)
-                shuffle_train = False
+            if self.cfg.exp.customize_dataloader:
+                self.train_set, self.train_loader = cls_dataset(mode='train', cfg=self.cfg)
+                self.val_set, self.val_loader = cls_dataset(mode='val', cfg=self.cfg)
             else:
-                shuffle_train = not issubclass(type(self.train_set), IterableDataset)
+                self.train_set = cls_dataset(mode='train', cfg=self.cfg)
+                self.val_set = cls_dataset(mode='val', cfg=self.cfg)
 
-            self.train_loader = DataLoader(
-                dataset=self.train_set,
-                batch_size=self.cfg.exp.train.batch_size,
-                collate_fn=getattr(self.train_set, 'get_batch', None),
-                num_workers=self.cfg.exp.n_workers,
-                shuffle=shuffle_train,
-                pin_memory=True,
-                drop_last=True,
-                sampler=self.sampler_train if self.cfg.var.is_parallel else None,
-            )
-            self.val_loader = DataLoader(
-                dataset=self.val_set,
-                batch_size=self.cfg.exp.val.batch_size,
-                collate_fn=getattr(self.val_set, 'get_batch', None),
+                if self.cfg.var.is_parallel:
+                    self.sampler_train = DistributedSampler(self.train_set)
+                    shuffle_train = False
+                else:
+                    shuffle_train = not issubclass(type(self.train_set), IterableDataset)
+
+                self.train_loader = DataLoader(
+                    dataset=self.train_set,
+                    batch_size=self.cfg.exp.train.batch_size,
+                    collate_fn=getattr(self.train_set, 'get_batch', None),
+                    num_workers=self.cfg.exp.n_workers,
+                    shuffle=shuffle_train,
+                    pin_memory=True,
+                    drop_last=True,
+                    sampler=self.sampler_train if self.cfg.var.is_parallel else None,
+                )
+                self.val_loader = DataLoader(
+                    dataset=self.val_set,
+                    batch_size=self.cfg.exp.val.batch_size,
+                    collate_fn=getattr(self.val_set, 'get_batch', None),
+                    num_workers=self.cfg.exp.n_workers,
+                    shuffle=False,
+                    pin_memory=True,
+                )
+        elif self.cfg.exp.mode != 'test':
+            raise ValueError
+
+        if self.cfg.exp.customize_dataloader:
+            self.test_set, self.test_loader = cls_dataset(mode='test', cfg=self.cfg)
+        else:
+            self.test_set = cls_dataset(mode='test', cfg=self.cfg)
+            self.test_loader = DataLoader(
+                dataset=self.test_set,
+                batch_size=self.cfg.exp.test.batch_size,
+                collate_fn=getattr(self.test_set, 'get_batch', None),
                 num_workers=self.cfg.exp.n_workers,
                 shuffle=False,
                 pin_memory=True,
             )
-        elif self.cfg.exp.mode != 'test':
-            raise ValueError
-
-        self.test_set = cls_dataset(mode='test', cfg=self.cfg)
-        self.test_loader = DataLoader(
-            dataset=self.test_set,
-            batch_size=self.cfg.exp.test.batch_size,
-            collate_fn=getattr(self.test_set, 'get_batch', None),
-            num_workers=self.cfg.exp.n_workers,
-            shuffle=False,
-            pin_memory=True,
-        )
 
     def _init_loggers(self):
         path_all = os.path.join(self.path_log, 'log_all.txt')
@@ -150,6 +157,8 @@ class Trainer(Operator):
             id_device = self.cfg.exp.idx_device[dist.get_rank()]
             self.model = nn.SyncBatchNorm.convert_sync_batchnorm(self.model)
             self.model = MyDistributedDataParallel(self.model, device_ids=[id_device])
+        if self.cfg.exp.train.use_gradscaler:
+            self.gradscaler = torch.cuda.amp.GradScaler()
 
         optimizer, scheduler = self._get_optimizer(getattr(self.model, 'get_params', self.model.parameters)())
 
@@ -201,21 +210,29 @@ class Trainer(Operator):
                 iter_total += 1
 
                 optimizer.zero_grad()
-                if hasattr(self.train_set, 'to_device'):
-                    data = self.train_set.to_device(data, device=self.device)
-                else:
-                    input, ground_truth = data
-                    data = input.to(self.device), ground_truth.to(self.device)
+                if not self.cfg.exp.customize_dataloader:
+                    if hasattr(self.train_set, 'to_device'):
+                        data = self.train_set.to_device(data, device=self.device)
+                    else:
+                        input, ground_truth = data
+                        data = input.to(self.device), ground_truth.to(self.device)
                 output = self.model(data)
                 metrics = self.model.get_metrics(data, output, mode='train')
-                metrics['loss_final'].backward()
-                optimizer.step()
+                if self.cfg.exp.train.use_gradscaler:
+                    self.gradscaler.scale(metrics['loss_final']).backward()
+                    self.gradscaler.unscale_(optimizer)
+                    self.gradscaler.step(optimizer)
+                    self.gradscaler.update()
+                else:
+                    metrics['loss_final'].backward()
+                    optimizer.step()
 
                 for name, value in metrics.items():
                     if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
                         self.writer.add_scalar(f'train/{name}', value, iter_total)
 
             self.model.after_epoch(mode='train')
+
             if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
                 self.model.vis(self.writer, epoch, data, output, mode='train', in_epoch=False)
 
@@ -245,11 +262,12 @@ class Trainer(Operator):
             for i_repeat in range(self.cfg.exp[mode].n_repeat):
                 self.model.before_epoch(mode, i_repeat)
                 for _, data in enumerate(track(data_loader, transient=True, description=mode)):
-                    if hasattr(dataset, 'to_device'):
-                        data = dataset.to_device(data, device=self.device)
-                    else:
-                        input, ground_truth = data
-                        data = input.to(self.device), ground_truth.to(self.device)
+                    if not self.cfg.exp.customize_dataloader:
+                        if hasattr(dataset, 'to_device'):
+                            data = dataset.to_device(data, device=self.device)
+                        else:
+                            input, ground_truth = data
+                            data = input.to(self.device), ground_truth.to(self.device)
                     if self.cfg.var.is_parallel and dist.get_rank() == 0:
                         # if we use self.model(data), then after validation, training will get stuck
                         # see https://github.com/pytorch/pytorch/issues/54059#issuecomment-801754630

@@ -12,7 +12,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 class Operator:
-
     def __init__(self, cfg):
         self.cfg = cfg
         cfg.var.obj_operator = self
@@ -61,7 +60,6 @@ class Operator:
         self.device = torch.device(name_device)
 
     def _init_dirs(self):
-
         def check_substrings():
             if isinstance(self.cfg.exp.names_exp_delete, str):
                 names_exp_delete = [self.cfg.exp.names_exp_delete]
