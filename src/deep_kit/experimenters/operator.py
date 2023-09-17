@@ -35,7 +35,7 @@ class Operator:
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.enabled = True
         else:
-            seed = int(self.cfg.random_seed)
+            seed = int(self.cfg.exp.rand_seed)
             random.seed(seed)
             os.environ['PYTHONHASHSEED'] = str(seed)
             np.random.seed(seed)
