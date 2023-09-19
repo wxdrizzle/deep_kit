@@ -346,7 +346,7 @@ class Trainer(Operator):
         for key in list(dict_state.keys()):
             if key.startswith('module.'):
                 dict_state[key[7:]] = dict_state.pop(key)
-        print(self.cfg.exp.test.path_model_trained)
+        print(f'loading pretrained model for test from path {self.cfg.exp.test.path_model_trained}')
         self.model.load_state_dict(dict_state, strict=True)
 
         self.val(epoch=0, mode='test')

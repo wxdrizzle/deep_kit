@@ -10,3 +10,4 @@ deep_kit.egg-info/
 pyrightconfig.json
 *.un~
 *.lvimrc
+*.swp
