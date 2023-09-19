@@ -161,7 +161,7 @@ class Trainer(Operator):
         if self.cfg.exp.train.use_gradscaler:
             self.gradscaler = torch.cuda.amp.GradScaler()
 
-        optimizer, scheduler = self._get_optimizer(getattr(self.model, 'get_params', self.model.parameters)())
+        self.optimizer, scheduler = self._get_optimizer(getattr(self.model, 'get_params', self.model.parameters)())
 
         if self.cfg.exp.train.path_model_trained is not None:
             if self.cfg.var.is_parallel:
@@ -173,8 +173,13 @@ class Trainer(Operator):
             self.model.load_state_dict(torch.load(self.cfg.exp.train.path_model_trained, map_location=map_location),
                                        strict=True)
         self.score_best = -math.inf
+        self.score_best_test = -math.inf
         self.is_best = True
         iter_total = 0
+
+        if hasattr(self.model, 'before_train'):
+            self.model.before_train()
+
         for epoch in range(self.cfg.exp.train.epoch_start, self.cfg.exp.train.n_epochs):
             # validation
             if epoch == self.cfg.exp.train.epoch_start:
@@ -203,14 +208,16 @@ class Trainer(Operator):
                 # see WARNING in https://pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler
                 self.sampler_train.set_epoch(epoch)
 
-            if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
-                obj_to_enumerate = track(self.train_loader, transient=True, description='training')
-            else:
-                obj_to_enumerate = self.train_loader
+            print('----------- training epoch begins -----------')
+            # if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+            #     obj_to_enumerate = track(self.train_loader, transient=True, description='training')
+            # else:
+            #     obj_to_enumerate = self.train_loader
+            obj_to_enumerate = self.train_loader
             for _, data in enumerate(obj_to_enumerate):
                 iter_total += 1
 
-                optimizer.zero_grad()
+                self.optimizer.zero_grad()
                 if not self.cfg.exp.customize_dataloader:
                     if hasattr(self.train_set, 'to_device'):
                         data = self.train_set.to_device(data, device=self.device)
@@ -221,12 +228,12 @@ class Trainer(Operator):
                 metrics = self.model.get_metrics(data, output, mode='train')
                 if self.cfg.exp.train.use_gradscaler:
                     self.gradscaler.scale(metrics['loss_final']).backward()
-                    self.gradscaler.unscale_(optimizer)
-                    self.gradscaler.step(optimizer)
+                    self.gradscaler.unscale_(self.optimizer)
+                    self.gradscaler.step(self.optimizer)
                     self.gradscaler.update()
                 else:
                     metrics['loss_final'].backward()
-                    optimizer.step()
+                    self.optimizer.step()
 
                 for name, value in metrics.items():
                     if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
@@ -249,11 +256,16 @@ class Trainer(Operator):
 
         self.logger_train.warn(f'------ Training finished ------')
 
+        if hasattr(self.model, 'after_train'):
+            self.model.after_train()
+
         if self.cfg.var.is_parallel:
             dist.destroy_process_group()
 
     def val(self, epoch, mode='val'):
         assert mode in ['val', 'test']
+        self.is_best = False
+        self.is_best_test = False
         data_loader = getattr(self, f'{mode}_loader')
         dataset = getattr(self, f'{mode}_set')
 
@@ -262,7 +274,10 @@ class Trainer(Operator):
 
             for i_repeat in range(self.cfg.exp[mode].n_repeat):
                 self.model.before_epoch(mode, i_repeat)
-                for _, data in enumerate(track(data_loader, transient=True, description=mode)):
+                print(f'----------- {mode} epoch begins -----------')
+                obj_to_enumerate = data_loader
+                # obj_to_enumerate = track(data_loader, transient=True, description=mode)
+                for _, data in enumerate(obj_to_enumerate):
                     if not self.cfg.exp.customize_dataloader:
                         if hasattr(dataset, 'to_device'):
                             data = dataset.to_device(data, device=self.device)
@@ -284,6 +299,10 @@ class Trainer(Operator):
                     self.is_best = self.model.metrics_epoch['metric_final'] > self.score_best
                     if self.is_best:
                         self.score_best = self.model.metrics_epoch['metric_final']
+                elif mode == 'test' and self.cfg.exp.mode == 'train':
+                    self.is_best_test = self.model.metrics_epoch['metric_final'] > self.score_best_test
+                    if self.is_best_test:
+                        self.score_best_test = self.model.metrics_epoch['metric_final']
 
                 result_log = [f'epoch: {epoch}']
                 for (name, value) in self.model.metrics_epoch.items():
@@ -300,10 +319,14 @@ class Trainer(Operator):
                     self.writer.add_scalar(f'{mode}/{name}', value, epoch)
 
             # save best model
-            if self.is_best and mode == 'val':
+            if mode == 'val' and self.is_best:
                 if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
-                    self.logger_checkpoints.warn(f'Saving best model: epoch {epoch}')
-                    torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, 'model_best.pth'))
+                    self.logger_checkpoints.warn(f'Saving best model on val set: epoch {epoch}')
+                    torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, 'model_best_val.pth'))
+            if mode == 'test' and self.is_best_test and self.cfg.exp.train.save_best_model_on_test_set:
+                if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+                    self.logger_checkpoints.warn(f'Saving best model on test set: epoch {epoch}')
+                    torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, 'model_best_test.pth'))
 
             if mode == 'val':
                 if getattr(self.cfg.exp.val, 'save_every_model', False):
@@ -323,9 +346,9 @@ class Trainer(Operator):
         for key in list(dict_state.keys()):
             if key.startswith('module.'):
                 dict_state[key[7:]] = dict_state.pop(key)
-        self.model.load_state_dict(dict_state, strict=False)
+        print(self.cfg.exp.test.path_model_trained)
+        self.model.load_state_dict(dict_state, strict=True)
 
-        self.is_best = False
         self.val(epoch=0, mode='test')
 
         if self.cfg.var.is_parallel:

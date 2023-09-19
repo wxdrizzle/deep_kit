@@ -8,3 +8,5 @@ deep_kit.egg-info/
 .vimspector.json
 .vim
 pyrightconfig.json
+*.un~
+*.lvimrc
