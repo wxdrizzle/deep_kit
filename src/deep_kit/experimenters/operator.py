@@ -71,6 +71,17 @@ class Operator:
                     return True
             return False
 
+        def yesno(question):
+            """Simple Yes/No Function."""
+            prompt = f'{question} ? (y/n): '
+            ans = input(prompt).strip().lower()
+            if ans not in ['y', 'n']:
+                print(f'{ans} is invalid, please try again...')
+                return yesno(question)
+            if ans == 'y':
+                return True
+            return False
+
         self.time_exp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
         self.name_exp = f'{self.cfg.exp.mode}_{self.cfg.exp.name}_{self.time_exp}'
@@ -94,6 +105,18 @@ class Operator:
                 _ = shutil.copyfile(path, os.path.join(self.path_backup, os.path.basename(path)))
 
             if (self.cfg.exp.names_exp_delete is not None) and os.path.exists(self.cfg.exp.path_save):
+                for name_exp_delete in self.cfg.exp.names_exp_delete:
+                    if ('tmp' not in name_exp_delete
+                            and not name_exp_delete.startswith(f'{self.cfg.exp.mode}_{self.cfg.exp.name}')):
+                        answer = yesno(
+                            f'The experiment mode is {self.cfg.exp.mode} and the experiment name is {self.cfg.exp.name}, '
+                            + f'but cfg.exp.names_exp_delete contains a string "{name_exp_delete}", ' +
+                            'which is a result folder for another experiment.' +
+                            'Are you sure you want to delete that result folder?')
+                        if not answer:
+                            raise ValueError('You said you do not want to delete that folder.' +
+                                             'Please change exp.name_exp_delete.')
+
                 dirs_exp = os.listdir(self.cfg.exp.path_save)
                 for dir in dirs_exp:
                     if dir != self.name_exp and check_substrings():

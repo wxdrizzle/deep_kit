@@ -17,6 +17,12 @@ elif prefix == 'te':
     cfg_exp = Ocfg.load(f'cfgs/test/{cfg_cli.exp.name}.yml')
 else:
     raise ValueError
+
+if 'name' in cfg_exp.exp and cfg_exp.exp.name != cfg_cli.exp.name:
+    raise ValueError(
+        f'The yaml file name and the "exp.name" in the yaml must be the same, but got "{cfg_cli.exp.name}" and "{cfg_exp.exp.name}", respectively.'
+    )
+
 cfg_default_model = Ocfg.load(f'cfgs/default/models/{cfg_exp.model.name}.yml')
 cfg_default_dataset = Ocfg.load(f'cfgs/default/datasets/{cfg_exp.dataset.name}.yml')
 
