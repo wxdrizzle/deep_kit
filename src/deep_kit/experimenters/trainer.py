@@ -1,5 +1,6 @@
 import os
 import math
+import numpy as np
 from rich.progress import track
 
 import torch
@@ -66,6 +67,7 @@ class Trainer(Operator):
                     drop_last=True,
                     sampler=self.sampler_train
                     if self.cfg.var.is_parallel and not issubclass(type(self.train_set), IterableDataset) else None,
+                    worker_init_fn=lambda x: np.random.seed(42 + x),
                 )
                 self.val_loader = DataLoader(
                     dataset=self.val_set,
@@ -74,6 +76,7 @@ class Trainer(Operator):
                     num_workers=self.cfg.exp.n_workers,
                     shuffle=False,
                     pin_memory=True,
+                    worker_init_fn=lambda x: np.random.seed(42 + x),
                 )
         elif self.cfg.exp.mode != 'test':
             raise ValueError
@@ -89,6 +92,7 @@ class Trainer(Operator):
                 num_workers=self.cfg.exp.n_workers,
                 shuffle=False,
                 pin_memory=True,
+                worker_init_fn=lambda x: np.random.seed(42 + x),
             )
 
     def _init_loggers(self):
@@ -113,8 +117,14 @@ class Trainer(Operator):
                 momentum=cfg_opt.momentum,
                 nesterov=cfg_opt.nesterov,
             )
-        elif name_opt in ('adam', 'adamw'):
+        elif name_opt == 'adam':
             optimizer = optim.Adam(
+                params=params,
+                lr=self.cfg.exp.train.optimizer.lr,
+                weight_decay=cfg_opt.weight_decay,
+            )
+        elif name_opt == 'adamw':
+            optimizer = optim.AdamW(
                 params=params,
                 lr=self.cfg.exp.train.optimizer.lr,
                 weight_decay=cfg_opt.weight_decay,
@@ -209,11 +219,10 @@ class Trainer(Operator):
                 self.sampler_train.set_epoch(epoch)
 
             print('----------- training epoch begins -----------')
-            # if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
-            #     obj_to_enumerate = track(self.train_loader, transient=True, description='training')
-            # else:
-            #     obj_to_enumerate = self.train_loader
-            obj_to_enumerate = self.train_loader
+            if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+                obj_to_enumerate = track(self.train_loader, transient=True, description='training')
+            else:
+                obj_to_enumerate = self.train_loader
             for _, data in enumerate(obj_to_enumerate):
                 iter_total += 1
 
@@ -275,8 +284,8 @@ class Trainer(Operator):
             for i_repeat in range(self.cfg.exp[mode].n_repeat):
                 self.model.before_epoch(mode, i_repeat)
                 print(f'----------- {mode} epoch begins -----------')
-                obj_to_enumerate = data_loader
                 # obj_to_enumerate = track(data_loader, transient=True, description=mode)
+                obj_to_enumerate = data_loader
                 for _, data in enumerate(obj_to_enumerate):
                     if not self.cfg.exp.customize_dataloader:
                         if hasattr(dataset, 'to_device'):
@@ -342,12 +351,14 @@ class Trainer(Operator):
     def test(self):
         self.model = self.model.to(self.device)
 
-        dict_state = torch.load(self.cfg.exp.test.path_model_trained, map_location=self.device)
-        for key in list(dict_state.keys()):
-            if key.startswith('module.'):
-                dict_state[key[7:]] = dict_state.pop(key)
-        print(f'loading pretrained model for test from path {self.cfg.exp.test.path_model_trained}')
-        self.model.load_state_dict(dict_state, strict=True)
+        if self.cfg.exp.test.path_model_trained is None:
+            print('warning: no model is loaded')
+        else:
+            dict_state = torch.load(self.cfg.exp.test.path_model_trained, map_location=self.device)
+            for key in list(dict_state.keys()):
+                if key.startswith('module.'):
+                    dict_state[key[7:]] = dict_state.pop(key)
+            self.model.load_state_dict(dict_state, strict=False)
 
         self.val(epoch=0, mode='test')
 
