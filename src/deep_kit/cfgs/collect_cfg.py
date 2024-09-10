@@ -1,6 +1,7 @@
 from omegaconf import OmegaConf as Ocfg
 import importlib.resources
 from .. import cfgs
+import os
 
 Ocfg.register_new_resolver('len', lambda x: len(x))
 
@@ -12,16 +13,21 @@ prefix = cfg_cli.exp.name[:2]
 cfg_cli.exp.name = cfg_cli.exp.name[2:]
 
 if prefix == 'tr':
-    cfg_exp = Ocfg.load(f'cfgs/{cfg_cli.exp.name}.yml')
+    path = f'cfgs/train/{cfg_cli.exp.name}.yml'
+    if os.path.exists(path):
+        cfg_exp = Ocfg.load(path)
+    else:
+        cfg_exp = Ocfg.load(f'cfgs/{cfg_cli.exp.name}.yml')
 elif prefix == 'te':
     cfg_exp = Ocfg.load(f'cfgs/test/{cfg_cli.exp.name}.yml')
 else:
     raise ValueError
 
-if 'name' in cfg_exp.exp and cfg_exp.exp.name != cfg_cli.exp.name:
+if 'name' in cfg_exp.exp and cfg_exp.exp.name != '_'.join(cfg_cli.exp.name.split('/')):
     raise ValueError(
         f'The yaml file name and the "exp.name" in the yaml must be the same, but got "{cfg_cli.exp.name}" and "{cfg_exp.exp.name}", respectively.'
     )
+cfg_cli.exp.name = '_'.join(cfg_cli.exp.name.split('/'))
 
 cfg_default_model = Ocfg.load(f'cfgs/default/models/{cfg_exp.model.name}.yml')
 cfg_default_dataset = Ocfg.load(f'cfgs/default/datasets/{cfg_exp.dataset.name}.yml')
