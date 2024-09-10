@@ -1,6 +1,9 @@
 import importlib
 import logging
 from rich.logging import RichHandler
+from clearml import Task
+import os
+import shutil
 
 
 def setup_logger(name, *paths_files):
@@ -47,3 +50,69 @@ def find_class(name: str, module: str, prefix: str = 'core'):
         raise NotImplementedError(f"class '{name_cls}' not found in {path_file}")
 
     return cls, path_file
+
+
+def flatten_dict(nested_dict, parent_key='', sep='.', ignore_keys=None):
+    flat_dict = {}
+    for key, value in nested_dict.items():
+        if ignore_keys is not None and key in ignore_keys:
+            continue
+        new_key = f"{parent_key}{sep}{key}" if parent_key else key
+        if isinstance(value, dict):
+            flat_dict.update(flatten_dict(value, new_key))
+        else:
+            flat_dict[new_key] = value
+    return flat_dict
+
+
+def unflatten_dict(flat_dict, sep='.'):
+    nested_dict = {}
+    for key, value in flat_dict.items():
+        keys = key.split(sep)
+        d = nested_dict
+        for k in keys[:-1]:
+            d = d.setdefault(k, {})
+        if value == '':
+            value = None
+        d[keys[-1]] = value
+    return nested_dict
+
+
+def clean_tasks(project_name):
+    tasks = Task.get_tasks(project_name=project_name)
+    for task in tasks:
+        if task.get_archived():
+            try:
+                path_exp = task.get_user_properties()['Experiment Path']['value']
+                if os.path.exists(path_exp):
+                    shutil.rmtree(path_exp)
+                name_exp = os.path.basename(path_exp)
+                path_folder = os.path.dirname(path_exp)
+                path_tensorboard = os.path.join(path_folder, 'runs', name_exp)
+                if os.path.exists(path_tensorboard):
+                    shutil.rmtree(path_tensorboard)
+            except Exception as e:
+                print(e)
+            try:
+                task.delete(raise_on_error=True)
+            except Exception as e:
+                print(e)
+
+
+def run_test_for_tasks(task_ids, commit_id=None, diff=None, dict_params_override=None):
+    for task_id in task_ids:
+        task = Task.get_task(task_id=task_id)
+        path_exp = task.get_user_properties()['Experiment Path']['value']
+        path_model_best_val = os.path.join(path_exp, 'checkpoints', 'model_best_val.pth')
+        name_server = task.data.runtime['hostname']
+
+        task_new = Task.clone(source_task=task, name=task.name, parent=task.id)
+        task_new.set_task_type('testing')
+        task_new.set_parameter('exp/test.path_model_trained', path_model_best_val)
+        task_new.set_parameter('exp/mode', 'test')
+        if dict_params_override is not None:
+            for key, value in dict_params_override.items():
+                task_new.set_parameter(key, value)
+
+        task_new.set_script(commit=commit_id, entry_point='main.py', diff=diff)
+        Task.enqueue(task_new, queue_name=f'test_on_{name_server}_one_gpu')

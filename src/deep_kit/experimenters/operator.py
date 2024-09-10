@@ -1,3 +1,6 @@
+from clearml import Task
+
+task = Task.current_task()
 import os
 import datetime
 import shutil
@@ -60,32 +63,16 @@ class Operator:
         self.device = torch.device(name_device)
 
     def _init_dirs(self):
-        def check_substrings():
-            if isinstance(self.cfg.exp.names_exp_delete, str):
-                names_exp_delete = [self.cfg.exp.names_exp_delete]
-            else:
-                names_exp_delete = self.cfg.exp.names_exp_delete
-
-            for substring in names_exp_delete:
-                if substring in dir:
-                    return True
-            return False
-
-        def yesno(question):
-            """Simple Yes/No Function."""
-            prompt = f'{question} ? (y/n): '
-            ans = input(prompt).strip().lower()
-            if ans not in ['y', 'n']:
-                print(f'{ans} is invalid, please try again...')
-                return yesno(question)
-            if ans == 'y':
-                return True
-            return False
-
         self.time_exp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-
         self.name_exp = f'{self.cfg.exp.mode}_{self.cfg.exp.name}_{self.time_exp}'
-        self.path_exp = os.path.join(self.cfg.exp.path_save, self.name_exp)
+        if self.cfg.exp.path_save.startswith('.'):
+            task = Task.current_task()
+            path_dir_working = task.get_user_properties()['Working Dir']['value']
+            self.path_exp = os.path.join(path_dir_working, self.cfg.exp.path_save, self.name_exp)
+        else:
+            self.path_exp = os.path.join(self.cfg.exp.path_save, self.name_exp)
+        self.path_exp = os.path.realpath(self.path_exp)
+        task.set_user_properties({'name': 'Experiment Path', 'value': self.path_exp})
         if self.cfg.exp.mode == 'train':
             self.path_checkpoints = os.path.join(self.path_exp, 'checkpoints')
             if not os.path.exists(self.path_checkpoints):
@@ -97,41 +84,24 @@ class Operator:
         if not os.path.exists(self.path_log):
             os.makedirs(self.path_log)
 
-        if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
-            self.path_backup = os.path.join(self.path_exp, 'backup')
-            if not os.path.exists(self.path_backup):
-                os.makedirs(self.path_backup)
-            if not os.path.exists(os.path.join(self.path_backup, 'networks')):
-                os.makedirs(os.path.join(self.path_backup, 'networks'))
-            if not os.path.exists(os.path.join(self.path_backup, 'datasets')):
-                os.makedirs(os.path.join(self.path_backup, 'datasets'))
-            if not os.path.exists(os.path.join(self.path_backup, 'models')):
-                os.makedirs(os.path.join(self.path_backup, 'models'))
-            for path in self.model.paths_file_net:
-                _ = shutil.copyfile(path, os.path.join(self.path_backup, 'networks', os.path.basename(path)))
-            _ = shutil.copyfile(path, os.path.join(self.path_backup, 'models', os.path.basename(self.path_file_model)))
-            _ = shutil.copyfile(path,
-                                os.path.join(self.path_backup, 'datasets', os.path.basename(self.path_file_dataset)))
-
-            if (self.cfg.exp.names_exp_delete is not None) and os.path.exists(self.cfg.exp.path_save):
-                for name_exp_delete in self.cfg.exp.names_exp_delete:
-                    if ('tmp' not in name_exp_delete
-                            and not name_exp_delete.startswith(f'{self.cfg.exp.mode}_{self.cfg.exp.name}')):
-                        answer = yesno(
-                            f'The experiment mode is {self.cfg.exp.mode} and the experiment name is {self.cfg.exp.name}, '
-                            + f'but cfg.exp.names_exp_delete contains a string "{name_exp_delete}", ' +
-                            'which is a result folder for another experiment.' +
-                            'Are you sure you want to delete that result folder?')
-                        if not answer:
-                            raise ValueError('You said you do not want to delete that folder.' +
-                                             'Please change exp.name_exp_delete.')
-
-                dirs_exp = os.listdir(self.cfg.exp.path_save)
-                for dir in dirs_exp:
-                    if dir != self.name_exp and check_substrings():
-                        shutil.rmtree(os.path.join(self.cfg.exp.path_save, dir))
-                        if os.path.exists(os.path.join(self.cfg.exp.path_save, 'runs', dir)):
-                            shutil.rmtree(os.path.join(self.cfg.exp.path_save, 'runs', dir))
+        # if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+        #     path_save = os.path.dirname(self.path_exp)
+        #     dirs_exp = os.listdir(path_save)
+        #     for dir in dirs_exp:
+        #         delete = False
+        #         if 'tmp' in dir:
+        #             delete = True
+        #         dir_wo_time = '_'.join(dir.split('_')[:-2])
+        #         if dir_wo_time == f'{self.cfg.exp.mode}_{self.cfg.exp.name}':
+        #             delete = True
+        #         if self.cfg.exp.names_exp_delete is not None and dir_wo_time in self.cfg.exp.names_exp_delete:
+        #             delete = True
+        #         if dir == self.name_exp:
+        #             delete = False
+        #         if delete:
+        #             shutil.rmtree(os.path.join(path_save, dir))
+        #             if os.path.exists(os.path.join(path_save, 'runs', dir)):
+        #                 shutil.rmtree(os.path.join(path_save, 'runs', dir))
 
     def _init_writer(self):
         if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:

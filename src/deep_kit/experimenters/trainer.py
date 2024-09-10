@@ -171,8 +171,6 @@ class Trainer(Operator):
         if self.cfg.exp.train.use_gradscaler:
             self.gradscaler = torch.cuda.amp.GradScaler()
 
-        self.optimizer, scheduler = self._get_optimizer(getattr(self.model, 'get_params', self.model.parameters)())
-
         if self.cfg.exp.train.path_model_trained is not None:
             if self.cfg.var.is_parallel:
                 dist.barrier()
@@ -182,6 +180,11 @@ class Trainer(Operator):
                 map_location = self.device
             self.model.load_state_dict(torch.load(self.cfg.exp.train.path_model_trained, map_location=map_location),
                                        strict=True)
+            if hasattr(self.model, 'after_load_model'):
+                self.model.after_load_model()
+
+        self.optimizer, scheduler = self._get_optimizer(getattr(self.model, 'get_params', self.model.parameters)())
+
         self.score_best = -math.inf
         self.score_best_test = -math.inf
         self.is_best = True
@@ -190,6 +193,7 @@ class Trainer(Operator):
         if hasattr(self.model, 'before_train'):
             self.model.before_train()
 
+        n_epochs_from_best = 0
         for epoch in range(self.cfg.exp.train.epoch_start, self.cfg.exp.train.n_epochs):
             # validation
             if epoch == self.cfg.exp.train.epoch_start:
@@ -207,7 +211,13 @@ class Trainer(Operator):
                 if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
                     self.val(epoch, mode='val')
                     if self.is_best:
+                        n_epochs_from_best = 0
                         self.val(epoch, mode='test')
+                    else:
+                        n_epochs_from_best += self.cfg.exp.val.n_epochs_once
+            if (self.cfg.exp.val.n_epoch_stop_after_not_better is not None
+                    and n_epochs_from_best >= self.cfg.exp.val.n_epoch_stop_after_not_better):
+                break
             if self.cfg.var.is_parallel:
                 dist.barrier()
 
@@ -219,10 +229,11 @@ class Trainer(Operator):
                 self.sampler_train.set_epoch(epoch)
 
             print('----------- training epoch begins -----------')
-            if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
-                obj_to_enumerate = track(self.train_loader, transient=True, description='training')
-            else:
-                obj_to_enumerate = self.train_loader
+            # if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
+            #     obj_to_enumerate = track(self.train_loader, transient=True, description='training')
+            # else:
+            #     obj_to_enumerate = self.train_loader
+            obj_to_enumerate = self.train_loader
             for _, data in enumerate(obj_to_enumerate):
                 iter_total += 1
 

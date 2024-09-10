@@ -1,5 +1,6 @@
 _meta:
     project: ???
+    path_conda_env: null
 
 exp:
     name: tmp
@@ -11,7 +12,6 @@ exp:
     compile_model: False # for pytorch 2.0+
     customize_dataloader: False
 
-    mode: train
     train:
         path_model_trained: null
         epoch_start: 0
@@ -61,6 +61,7 @@ exp:
         save_every_model: False
         save_every_better_model: False
         save_latest_model: False
+        n_epoch_stop_after_not_better: null
 
     test:
         batch_size: 10
