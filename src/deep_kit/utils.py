@@ -79,13 +79,13 @@ def unflatten_dict(flat_dict, sep='.'):
 
 
 def clean_tasks(project_name):
-    tasks = Task.get_tasks(project_name=project_name)
-    for task in tasks:
+    task_ids = Task.query_tasks(project_name=project_name)
+    for task_id in task_ids:
+        task = Task.get_task(task_id=task_id)
         if task.get_archived():
             try:
                 path_exp = task.get_user_properties()['Experiment Path']['value']
-                if os.path.exists(path_exp):
-                    shutil.rmtree(path_exp)
+                shutil.rmtree(path_exp)
                 name_exp = os.path.basename(path_exp)
                 path_folder = os.path.dirname(path_exp)
                 path_tensorboard = os.path.join(path_folder, 'runs', name_exp)
@@ -93,13 +93,14 @@ def clean_tasks(project_name):
                     shutil.rmtree(path_tensorboard)
             except Exception as e:
                 print(e)
+                continue
             try:
-                task.delete(raise_on_error=True)
+                task.delete(raise_on_error=False)
             except Exception as e:
                 print(e)
 
 
-def run_test_for_tasks(task_ids, commit_id=None, diff=None, dict_params_override=None):
+def run_test_for_tasks(task_ids, commit_id=None, diff=None, dict_params_override=None, queue=None):
     for task_id in task_ids:
         task = Task.get_task(task_id=task_id)
         path_exp = task.get_user_properties()['Experiment Path']['value']
@@ -115,4 +116,7 @@ def run_test_for_tasks(task_ids, commit_id=None, diff=None, dict_params_override
                 task_new.set_parameter(key, value)
 
         task_new.set_script(commit=commit_id, entry_point='main.py', diff=diff)
-        Task.enqueue(task_new, queue_name=f'test_on_{name_server}_one_gpu')
+        if queue is None:
+            Task.enqueue(task_new, queue_name=f'{name_server}_one_gpu')
+        else:
+            Task.enqueue(task_new, queue_name=queue)
