@@ -18,6 +18,7 @@ exp:
         n_epochs: 1000
         batch_size: 10
         use_gradscaler: False
+        save_best_model_on_val_set: True
         save_best_model_on_test_set: False
         optimizer:
             name: adam
@@ -62,7 +63,7 @@ exp:
         save_every_better_model: False
         save_latest_model: False
         n_epoch_stop_after_not_better: null
-
+        epochs_metrics_min: [[-1], [-0.1]]
     test:
         batch_size: 10
         path_model_trained: null

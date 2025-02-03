@@ -10,8 +10,9 @@ from torch.utils.data import IterableDataset, DataLoader
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 import torch.distributed as dist
-
+import time
 from .operator import Operator
+
 from ..utils import setup_logger, find_class
 
 
@@ -32,9 +33,6 @@ class Trainer(Operator):
         self._init_dataloaders()
         cls_model, self.path_file_model = find_class(cfg.model.name, 'model')
         self.model = cls_model(cfg)
-        if torch.__version__.startswith('2.'):
-            if cfg.exp.compile_model:
-                self.model = torch.compile(self.model, dynamic=True)
         self._init_dirs()
         self._init_loggers()
         self._init_writer()
@@ -218,6 +216,14 @@ class Trainer(Operator):
             if (self.cfg.exp.val.n_epoch_stop_after_not_better is not None
                     and n_epochs_from_best >= self.cfg.exp.val.n_epoch_stop_after_not_better):
                 break
+            if epoch in self.cfg.exp.val.epochs_metrics_min[0]:
+                metric_min_allowed = (
+                    self.cfg.exp.val.epochs_metrics_min[1][self.cfg.exp.val.epochs_metrics_min[0].index(epoch)])
+                if self.score_best_test < metric_min_allowed:
+                    print(
+                        f'Stop at epoch {epoch} because best test performance {self.score_best_test} < threshold {metric_min_allowed}'
+                    )
+                    break
             if self.cfg.var.is_parallel:
                 dist.barrier()
 
@@ -244,6 +250,7 @@ class Trainer(Operator):
                     else:
                         input, ground_truth = data
                         data = input.to(self.device), ground_truth.to(self.device)
+
                 output = self.model(data)
                 metrics = self.model.get_metrics(data, output, mode='train')
                 if self.cfg.exp.train.use_gradscaler:
@@ -339,7 +346,7 @@ class Trainer(Operator):
                     self.writer.add_scalar(f'{mode}/{name}', value, epoch)
 
             # save best model
-            if mode == 'val' and self.is_best:
+            if mode == 'val' and self.is_best and self.cfg.exp.train.get('save_best_model_on_val_set', True):
                 if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
                     self.logger_checkpoints.warn(f'Saving best model on val set: epoch {epoch}')
                     torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, 'model_best_val.pth'))

@@ -80,6 +80,10 @@ else: # run by a clearML agent with new hyper-parameters
     dict_cfg = utils.unflatten_dict(dict_cfg)
     cfg = Ocfg.create(dict_cfg)
 
+    cfg_default_model = Ocfg.load(f'cfgs/default/models/{cfg.model.name}.yml')
+    cfg_default_dataset = Ocfg.load(f'cfgs/default/datasets/{cfg.dataset.name}.yml')
+    cfg = Ocfg.unsafe_merge(cfg_base, cfg_default_exp, cfg_default_model, cfg_default_dataset, cfg)
+
     # def make_cfg_type_correct(cfg):
     #     import omegaconf
     #     if not isinstance(cfg, omegaconf.dictconfig.DictConfig):

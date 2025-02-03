@@ -4,6 +4,8 @@ from rich.logging import RichHandler
 from clearml import Task
 import os
 import shutil
+from clearml import TaskTypes
+import socket
 
 
 def setup_logger(name, *paths_files):
@@ -82,41 +84,50 @@ def clean_tasks(project_name):
     task_ids = Task.query_tasks(project_name=project_name)
     for task_id in task_ids:
         task = Task.get_task(task_id=task_id)
-        if task.get_archived():
+        if task.get_archived() and task.data.runtime.get('hostname', '') == socket.gethostname():
+            print(f'cleaning archived task {task_id}')
             try:
-                path_exp = task.get_user_properties()['Experiment Path']['value']
-                shutil.rmtree(path_exp)
-                name_exp = os.path.basename(path_exp)
-                path_folder = os.path.dirname(path_exp)
-                path_tensorboard = os.path.join(path_folder, 'runs', name_exp)
-                if os.path.exists(path_tensorboard):
-                    shutil.rmtree(path_tensorboard)
+                path_exp = task.get_user_properties().get('Experiment Path', {}).get('value', None)
+                if path_exp is not None:
+                    if os.path.exists(path_exp) and (task.task_type == TaskTypes.training or 'test' in path_exp):
+                        shutil.rmtree(path_exp)
+                    name_exp = os.path.basename(path_exp)
+                    path_folder = os.path.dirname(path_exp)
+                    path_tensorboard = os.path.join(path_folder, 'runs', name_exp)
+                    if os.path.exists(path_tensorboard) and (task.task_type == TaskTypes.training
+                                                             or 'test' in path_exp):
+                        shutil.rmtree(path_tensorboard)
             except Exception as e:
                 print(e)
-                continue
             try:
                 task.delete(raise_on_error=False)
             except Exception as e:
                 print(e)
 
 
-def run_test_for_tasks(task_ids, commit_id=None, diff=None, dict_params_override=None, queue=None):
+def run_test_for_tasks(task_ids, commit_id=None, diff=None, dict_params_override=None, queue=None, models=('best', )):
     for task_id in task_ids:
         task = Task.get_task(task_id=task_id)
         path_exp = task.get_user_properties()['Experiment Path']['value']
-        path_model_best_val = os.path.join(path_exp, 'checkpoints', 'model_best_val.pth')
         name_server = task.data.runtime['hostname']
 
-        task_new = Task.clone(source_task=task, name=task.name, parent=task.id)
-        task_new.set_task_type('testing')
-        task_new.set_parameter('exp/test.path_model_trained', path_model_best_val)
-        task_new.set_parameter('exp/mode', 'test')
-        if dict_params_override is not None:
-            for key, value in dict_params_override.items():
-                task_new.set_parameter(key, value)
+        for model in models:
+            if model.startswith('best'):
+                path_model_best_val = os.path.join(path_exp, 'checkpoints', f'model_{model}.pth')
+            elif model == 'latest':
+                path_model_best_val = os.path.join(path_exp, 'checkpoints', 'model_latest.pth')
+            else:
+                raise ValueError(f"each model should be 'best' or 'latest', but got {model}")
+            task_new = Task.clone(source_task=task, name=task.name, parent=task.id)
+            task_new.set_task_type('testing')
+            task_new.set_parameter('exp/test.path_model_trained', path_model_best_val)
+            task_new.set_parameter('exp/mode', 'test')
+            if dict_params_override is not None:
+                for key, value in dict_params_override.items():
+                    task_new.set_parameter(key, value)
 
-        task_new.set_script(commit=commit_id, entry_point='main.py', diff=diff)
-        if queue is None:
-            Task.enqueue(task_new, queue_name=f'{name_server}_one_gpu')
-        else:
-            Task.enqueue(task_new, queue_name=queue)
+            task_new.set_script(commit=commit_id, entry_point='main.py', diff=diff)
+            if queue is None:
+                Task.enqueue(task_new, queue_name=f'{name_server}_one_gpu')
+            else:
+                Task.enqueue(task_new, queue_name=queue)
