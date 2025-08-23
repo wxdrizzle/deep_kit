@@ -13,17 +13,18 @@ cfg_cli = Ocfg.from_cli()
 
 if hasattr(cfg_cli, 'exp'): # run manually in command line by python xxx.py exp.name=xxx
     assert hasattr(cfg_cli.exp, 'name')
-    prefix = cfg_cli.exp.name[:2]
-    cfg_cli.exp.name = cfg_cli.exp.name[2:]
-    if prefix == 'tr':
+    if cfg_cli.exp.name.startswith('train'):
         cfg_cli.exp.mode = 'train'
         if os.path.exists(f'cfgs/train/{cfg_cli.exp.name}.yml'):
             cfg_exp = Ocfg.load(f'cfgs/train/{cfg_cli.exp.name}.yml')
         else:
             cfg_exp = Ocfg.load(f'cfgs/{cfg_cli.exp.name}.yml')
-    elif prefix == 'te':
+    elif cfg_cli.exp.name.startswith('test'):
         cfg_cli.exp.mode = 'test'
-        cfg_exp = Ocfg.load(f'cfgs/test/{cfg_cli.exp.name}.yml')
+        if os.path.exists(f'cfgs/test/{cfg_cli.exp.name}.yml'):
+            cfg_exp = Ocfg.load(f'cfgs/test/{cfg_cli.exp.name}.yml')
+        else:
+            cfg_exp = Ocfg.load(f'cfgs/{cfg_cli.exp.name}.yml')
     else:
         raise ValueError
     cfg_exp.exp.name = cfg_cli.exp.name

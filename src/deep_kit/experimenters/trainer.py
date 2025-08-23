@@ -304,6 +304,8 @@ class Trainer(Operator):
                 print(f'----------- {mode} epoch begins -----------')
                 # obj_to_enumerate = track(data_loader, transient=True, description=mode)
                 obj_to_enumerate = data_loader
+
+                begin_time = time.time()
                 for _, data in enumerate(obj_to_enumerate):
                     if not self.cfg.exp.customize_dataloader:
                         if hasattr(dataset, 'to_device'):
@@ -320,6 +322,11 @@ class Trainer(Operator):
                     _ = self.model.get_metrics(data, output, mode=mode)
                     if (not self.cfg.var.is_parallel) or dist.get_rank() == 0:
                         self.model.vis(self.writer, epoch, data, output, mode=mode, in_epoch=True)
+                elapsed_time = time.time() - begin_time
+                self.logger_extra.warning(
+                    f'[{mode}] epoch {epoch}: {elapsed_time:.2f} seconds for {len(self.test_set)} cases, average time per case: {elapsed_time / len(self.test_set):.2f} seconds'
+                )
+
                 self.model.after_epoch(mode)
 
                 if mode == 'val':
