@@ -62,6 +62,13 @@ exp:
         save_every_model: False
         save_every_better_model: False
         save_latest_model: False
+        save_key_models:
+            ema:
+                enable: False
+                alpha: 0.7
+                name_metric: 'metric_final'
+                values_metric: [0.5, 0.9]
+
         n_epoch_stop_after_not_better: null
         epochs_metrics_min: [[-1], [-0.1]]
     test:

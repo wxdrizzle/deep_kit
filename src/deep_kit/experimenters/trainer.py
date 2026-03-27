@@ -177,7 +177,7 @@ class Trainer(Operator):
             else:
                 map_location = self.device
             self.model.load_state_dict(torch.load(self.cfg.exp.train.path_model_trained, map_location=map_location),
-                                       strict=True)
+                                       strict=False)
             if hasattr(self.model, 'after_load_model'):
                 self.model.after_load_model()
 
@@ -372,6 +372,24 @@ class Trainer(Operator):
                 if self.cfg.exp.val.save_latest_model:
                     self.logger_checkpoints.warn(f'Saving latest model: epoch {epoch}')
                     torch.save(self.model.state_dict(), os.path.join(self.path_checkpoints, 'model_latest.pth'))
+                if self.cfg.exp.val.save_key_models.ema.enable:
+                    name_metric = self.cfg.exp.val.save_key_models.ema.name_metric
+                    metric = self.model.metrics_epoch[name_metric]
+                    if not hasattr(self, 'ema_metric'):
+                        self.ema_metric = metric
+                    else:
+                        alpha = self.cfg.exp.val.save_key_models.ema.alpha
+                        self.ema_metric = alpha*metric + (1-alpha) * self.ema_metric
+                    if not hasattr(self, 'ema_values_metric'):
+                        self.ema_values_metric = list(self.cfg.exp.val.save_key_models.ema.values_metric).copy()
+                    if len(self.ema_values_metric) != 0 and self.ema_metric >= self.ema_values_metric[0]:
+                        self.logger_checkpoints.warn(
+                            f'Saving EMA model: epoch {epoch}, ema of {name_metric} is {self.ema_metric} >= threshold {self.ema_values_metric[0]}'
+                        )
+                        torch.save(
+                            self.model.state_dict(),
+                            os.path.join(self.path_checkpoints, f'model_ema_threshold_{self.ema_values_metric[0]}.pth'))
+                        self.ema_values_metric.pop(0)
 
     def test(self):
         self.model = self.model.to(self.device)

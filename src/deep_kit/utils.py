@@ -105,11 +105,13 @@ def clean_tasks(project_name):
                 print(e)
 
 
-def run_test_for_tasks(task_ids, commit_id=None, diff=None, dict_params_override=None, queue=None, models=('best', )):
+def run_test_for_tasks(task_ids, commit_id=None, diff=None, dict_params_override=None, queue=None, models=('best', ),
+                       name_server=None):
     for task_id in task_ids:
         task = Task.get_task(task_id=task_id)
         path_exp = task.get_user_properties()['Experiment Path']['value']
-        name_server = task.data.runtime['hostname']
+        if name_server is None:
+            name_server = task.data.runtime['hostname']
 
         for model in models:
             if model.startswith('best'):
